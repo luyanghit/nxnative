@@ -130,6 +130,16 @@ fi
 cp "$DIR/AppIcon.icns" "$RESOURCES/AppIcon.icns"
 cp "$DIR/Info.plist" "$CONTENTS/Info.plist"
 
+mkdir -p "$RESOURCES/zh_CN.lproj" "$RESOURCES/en.lproj"
+cat << 'STRINGS' > "$RESOURCES/zh_CN.lproj/InfoPlist.strings"
+"CFBundleDisplayName" = "NXNative 启动器";
+"CFBundleName" = "NXNative 启动器";
+STRINGS
+cat << 'STRINGS' > "$RESOURCES/en.lproj/InfoPlist.strings"
+"CFBundleDisplayName" = "NXNative Launcher";
+"CFBundleName" = "NXNative Launcher";
+STRINGS
+
 echo "===> 3. 编译 Swift 原生应用..."
 swiftc -O -parse-as-library \
     -target arm64-apple-macos13.0 \
@@ -141,7 +151,9 @@ swiftc -O -parse-as-library \
 echo "===> 4. 安装到系统应用程序目录 (/Applications/)..."
 rm -rf "/Applications/$APP_NAME"
 rm -rf "$HOME/Applications/$APP_NAME"
+rm -rf "/Applications/NXNative 启动器.app"
 cp -R "$APP_DIR" "/Applications/$APP_NAME"
+ln -sf "$APP_NAME" "/Applications/NXNative 启动器.app"
 
 echo "===> 5. 清理临时构建产物..."
 rm -rf "$BUILD_DIR"
