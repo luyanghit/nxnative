@@ -33,6 +33,7 @@ static const struct { const char *build, *what; int layout; uint64_t obj, vtable
     { "9fe60a212cff9b9a3656ab63d4f882e5", "Octopath Traveler 0 1.0.5", UE5, 0x68022c8, 0x5b06f38, 0x12e40 },
     // DRAGON QUEST VII Reimagined 1.2.0: no fixed object (0: made by GCreateMalloc, given at the gate), its vtable (main+0x5e4c0e8, 21 slots), the cut constructor call (main+0x32758dc)
     { "f7ec03e4cb9de3bd8319d4e899d2e9cc", "DRAGON QUEST VII Reimagined 1.2.0", UE4_27, 0, 0x5e4c0e8, 0x32758dc },
+    { "2af81ff85004a975d22f43414e582aac", "DRAGON QUEST VII Reimagined 1.2.0 (Asia)", UE4_27, 0, 0x5e4c0e8, 0x32758dc },
     // FINAL FANTASY RESONANCE 1.0.1: the FMallocBinned3 object (main+0x77c6210, bss), its vtable (main+0x67df800, 32 slots), the cut constructor call (main+0x137f0)
     { "84e182f72ee1da4f477804bd05b54c15", "FINAL FANTASY RESONANCE 1.0.1", UE5_6, 0x77c6210, 0x67df800, 0x137f0 },
 };
