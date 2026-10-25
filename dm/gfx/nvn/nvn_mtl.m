@@ -1995,24 +1995,14 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
         // Metal reports a 16-byte alignment for texture buffer views (minimumTextureBufferAlignmentForPixelFormat), but on an Apple GPU a view at any offset that is a multiple of the element
         // size reads the right elements (measured on an M6: R32Float views at offsets 4, 8 and 12, all 64 elements right). Unreal puts some buffer textures at 8-byte offsets in its pools
         // (Octopath Traveler 0: offset 0x168), which used to be left as dummies. Below the element size the view stays a dummy
-        id<MTLBuffer> src_buf = b;
-        uint64_t src_off = mo;
         if (mo % al) {
             if (mo % (uint64_t)bpb) { RED_ONCE(38, "buffer texture offset %#llx not aligned to its %d-byte elements", (unsigned long long)mo, bpb); return nil; }
-            size_t sz = (size_t)t->d.width * bpb;
-            if (mo < b.length && sz > b.length - mo) sz = b.length - mo;
-            id<MTLBuffer> ab = [g_dev newBufferWithLength:sz options:MTLResourceStorageModeShared];
-            if (ab && b.contents) {
-                memcpy(ab.contents, (const uint8_t *)b.contents + mo, sz);
-                src_buf = ab;
-                src_off = 0;
-                res_add(ab);
-            }
+            static int once; if (!once++) MLOG("buffer texture at pool offset %#llx, below Metal's reported %lu-byte alignment: created there (element-aligned views read correctly on Apple GPUs)", (unsigned long long)mo, (unsigned long)al);
         }
-        MTLTextureDescriptor *d = [MTLTextureDescriptor textureBufferDescriptorWithPixelFormat:(MTLPixelFormat)pf width:t->d.width resourceOptions:src_buf.resourceOptions
+        MTLTextureDescriptor *d = [MTLTextureDescriptor textureBufferDescriptorWithPixelFormat:(MTLPixelFormat)pf width:t->d.width resourceOptions:b.resourceOptions
                                                                                          usage:MTLTextureUsageShaderRead | (t->d.flags & NVN_TEXTURE_FLAGS_IMAGE ? MTLTextureUsageShaderWrite : 0)];
         size_t row = ((size_t)t->d.width * bpb + al - 1) / al * al;
-        id<MTLTexture> mt = [src_buf newTextureWithDescriptor:d offset:src_off bytesPerRow:row];
+        id<MTLTexture> mt = [b newTextureWithDescriptor:d offset:mo bytesPerRow:row];
         if (!mt) { RED_ONCE(39, "cannot create buffer texture: %u elements format %#x", t->d.width, t->d.format); return nil; }
         res_add(mt);
         tex_put(t->serial, mt);

@@ -177,10 +177,9 @@ static OSStatus au_create(aout *a) {
                                      .mChannelsPerFrame = ch, .mBitsPerChannel = 16};
     AURenderCallbackStruct cb = {au_render, a};
 #if !TARGET_OS_IPHONE
-    { const char *e = getenv("DM_DBG_AU_FRAMES");
-      UInt32 fr = e ? (UInt32)atoi(e) : 256;
-      OSStatus st = AudioUnitSetProperty(a->au, kAudioDevicePropertyBufferFrameSize, kAudioUnitScope_Global, 0, &fr, sizeof fr);
-      if (e || st) LOG("audio device buffer frame count set to %u: status %d", fr, (int)st); }
+    { const char *e = getenv("DM_DBG_AU_FRAMES"); if (e) {   // diagnostic: on the Mac, make the sound card callback ask N frames each time (1024 = the iOS default, reproduces the crackling)
+        UInt32 fr = (UInt32)atoi(e); OSStatus st = AudioUnitSetProperty(a->au, kAudioDevicePropertyBufferFrameSize, kAudioUnitScope_Global, 0, &fr, sizeof fr);
+        LOG("audio device buffer frame count set to %u: status %d", fr, (int)st); } }
 #endif
     OSStatus st = AudioUnitSetProperty(a->au, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &f, sizeof f);
     if (!st) st = AudioUnitSetProperty(a->au, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &cb, sizeof cb);
