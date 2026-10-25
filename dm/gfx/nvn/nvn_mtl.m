@@ -1357,7 +1357,7 @@ enum { ALIAS_IDLE = 16 };
 static uint64_t g_alias_taken;   // shared textures evicted when another texture took over their storage (for the memory report)
 static nvn_hmap g_ghost;   // defined below (finalized texture serials)
 static int serial_holds(nvn_hmap *m, id o) { for (uint32_t i = 0; i < m->cap; i++) if (m->vals[i] == (__bridge void *)o) return 1; return 0; }
-static void alias_sweep(void);
+static void serial_drop_obj(id o, int have_rmu);
 static void alias_take_over(const alias_key *nk) {
     nvn_texlayout L; nvn_tex_layout(&nk->d, &L);
     if (!L.size) return;
@@ -1369,7 +1369,8 @@ static void alias_take_over(const alias_key *nk) {
         if (k.pool != nk->pool || !memcmp(&k, nk, sizeof k) || k.off >= hi) continue;
         nvn_texlayout kl; nvn_tex_layout(&k.d, &kl);
         uint64_t seen = (uint64_t)(uintptr_t)nvn_hm_get(&g_alias_seen, &k);
-        if (k.off + (int64_t)kl.size <= lo || (seen && g_fence + 1 - seen < ALIAS_IDLE) || serial_holds(&g_by_serial, (__bridge id)g_alias.vals[i])) continue;
+        if (k.off + (int64_t)kl.size <= lo || (seen && g_fence + 1 - seen < ALIAS_IDLE)) continue;
+        if (serial_holds(&g_ghost, (__bridge id)g_alias.vals[i])) continue;
         ks[n++] = k;
     }
     for (uint32_t j = 0; j < n; j++) {
@@ -1378,45 +1379,10 @@ static void alias_take_over(const alias_key *nk) {
         nvn_hm_del(&g_alias_seen, &ks[j]);
         id o = CFBridgingRelease(old);
         if (g_alias_set) CFSetRemoveValue(g_alias_set, (__bridge const void *)o);
-        if (serial_holds(&g_ghost, o)) defer_obj_unref(o); else defer_obj_release(o);
+        serial_drop_obj(o, 0);
+        defer_obj_release(o);
     }
     if (n) { g_ser_gen++; g_alias_taken += n; }
-    if (g_alias.n > 64) alias_sweep();
-}
-// Evict unreferenced orphan textures from the sharing table (g_alias): textures whose serial was deleted (nvnTextureFinalize)
-// and that are not held by g_by_serial or g_ghost. Without this, games that allocate non-packaged textures at distinct offsets
-// in a persistent pool (Luigi's Mansion 3, etc.) retain every texture ever created for the lifetime of the game, leaking gigabytes.
-static void alias_sweep(void) {
-    if (!g_alias.n) return;
-    uint64_t idle_thresh = g_alias.n > 256 ? ALIAS_IDLE : 120;
-    if (g_alias.n <= 64 && idle_thresh > ALIAS_IDLE) return;
-    CFMutableSetRef held = CFSetCreateMutable(NULL, 0, NULL);
-    for (uint32_t i = 0; i < g_by_serial.cap; i++) if (g_by_serial.vals[i]) CFSetAddValue(held, g_by_serial.vals[i]);
-    for (uint32_t i = 0; i < g_ghost.cap; i++) if (g_ghost.vals[i]) CFSetAddValue(held, g_ghost.vals[i]);
-    uint32_t n = 0; alias_key ks[128];
-    for (uint32_t i = 0; i < g_alias.cap && n < 128; i++) {
-        if (!g_alias.vals[i]) continue;
-        if (CFSetContainsValue(held, g_alias.vals[i])) continue;
-        alias_key k; memcpy(&k, g_alias.keys + (size_t)i * g_alias.klen, sizeof k);
-        uint64_t seen = (uint64_t)(uintptr_t)nvn_hm_get(&g_alias_seen, &k);
-        if (seen && g_fence + 1 - seen < idle_thresh) continue;
-        ks[n++] = k;
-    }
-    CFRelease(held);
-    for (uint32_t j = 0; j < n; j++) {
-        void *old = nvn_hm_del(&g_alias, &ks[j]);
-        if (!old) continue;
-        nvn_hm_del(&g_alias_seen, &ks[j]);
-        id o = CFBridgingRelease(old);
-        if (g_alias_set) CFSetRemoveValue(g_alias_set, (__bridge const void *)o);
-        if (serial_holds(&g_ghost, o)) defer_obj_unref(o); else defer_obj_release(o);
-    }
-    if (n) { g_ser_gen++; g_alias_taken += n; }
-}
-void mtl_alias_tick(void) {
-    pthread_mutex_lock(&g_smu);
-    alias_sweep();
-    pthread_mutex_unlock(&g_smu);
 }
 static __unsafe_unretained id serial_get(uint64_t k) { pthread_mutex_lock(&g_smu); __unsafe_unretained id o = hm_get_id(&g_by_serial, &k); pthread_mutex_unlock(&g_smu); return o; }
 static void serial_put(uint64_t k, id o) { pthread_mutex_lock(&g_smu); id old = hm_get_id(&g_by_serial, &k); if (old) { if (alias_has(old)) defer_obj_unref(old); else defer_obj_release(old); } hm_put_id(&g_by_serial, &k, o); g_ser_gen++; pthread_mutex_unlock(&g_smu); }
@@ -3328,6 +3294,88 @@ void mtl_reg_samp(int sid, const samp_par *sp) {
     if (g_sview[id_]) { CFRelease(g_sview[id_]); g_sview[id_] = NULL; g_srid[id_] = 0; }
     g_reg_gen++;
     g_sreg[id_] = *sp; g_sreg_ok[id_] = 1;
+    pthread_mutex_unlock(&g_rmu);
+}
+
+static void serial_drop_obj(id o, int have_rmu) {
+    while (1) {
+        uint64_t sers[64]; uint32_t n = 0;
+        for (uint32_t i = 0; i < g_by_serial.cap && n < 64; i++) {
+            if (g_by_serial.vals[i] == (__bridge void *)o) {
+                sers[n++] = *(const uint64_t *)(g_by_serial.keys + (size_t)i * g_by_serial.klen);
+            }
+        }
+        if (!n) break;
+        for (uint32_t j = 0; j < n; j++) {
+            nvn_hm_del(&g_tex_live, &sers[j]);
+            void *old = nvn_hm_del(&g_by_serial, &sers[j]);
+            if (old) CFRelease(old);
+            if (have_rmu) {
+                vc_set *s = nvn_hm_del(&g_vc, &sers[j]);
+                if (s) vc_set_free(s);
+            }
+        }
+    }
+}
+
+// Sweep idle textures from g_alias and unfinalized serials from g_by_serial.
+// Protects textures registered in g_treg (the texture descriptor pool) and g_ghost (recently in replay).
+static void alias_sweep(void) {
+    if (g_alias.n <= 256) return;
+    uint64_t idle_thresh = g_alias.n > 1024 ? 60 : (g_alias.n > 512 ? 120 : 180);
+
+    CFMutableSetRef active = CFSetCreateMutable(NULL, 0, NULL);
+    for (int i = 0; i < g_ntreg; i++) {
+        if (!g_treg[i].ok) continue;
+        if (g_treg[i].view) {
+            CFSetAddValue(active, g_treg[i].view);
+            id<MTLTexture> pt = ((__bridge id<MTLTexture>)g_treg[i].view).parentTexture;
+            if (pt) CFSetAddValue(active, (__bridge const void *)pt);
+        }
+    }
+    for (uint32_t i = 0; i < g_ghost.cap; i++) {
+        if (g_ghost.vals[i]) CFSetAddValue(active, g_ghost.vals[i]);
+    }
+
+    uint32_t n = 0; alias_key ks[128];
+    for (uint32_t i = 0; i < g_alias.cap && n < 128; i++) {
+        if (!g_alias.vals[i]) continue;
+        void *val = g_alias.vals[i];
+        if (CFSetContainsValue(active, val)) continue;
+        alias_key k; memcpy(&k, g_alias.keys + (size_t)i * g_alias.klen, sizeof k);
+        uint64_t seen = (uint64_t)(uintptr_t)nvn_hm_get(&g_alias_seen, &k);
+        if (seen && g_fence + 1 - seen < idle_thresh) continue;
+        ks[n++] = k;
+    }
+    CFRelease(active);
+
+    for (uint32_t j = 0; j < n; j++) {
+        void *old = nvn_hm_del(&g_alias, &ks[j]);
+        if (!old) continue;
+        nvn_hm_del(&g_alias_seen, &ks[j]);
+        id o = CFBridgingRelease(old);
+        if (g_alias_set) CFSetRemoveValue(g_alias_set, (__bridge const void *)o);
+        serial_drop_obj(o, 1);
+        defer_obj_release(o);
+    }
+    if (n) {
+        g_ser_gen++;
+        g_alias_taken += n;
+        static uint64_t total_swept; total_swept += n;
+        static uint64_t last_log_f;
+        if (g_fence - last_log_f >= 180) {
+            last_log_f = g_fence;
+            LOG("[nvn-mtl] alias sweep: evicted %u idle textures (%u swept total, %u remain in alias, %u in serial table)",
+                n, (unsigned)total_swept, (unsigned)g_alias.n, (unsigned)g_by_serial.n);
+        }
+    }
+}
+
+void mtl_alias_tick(void) {
+    pthread_mutex_lock(&g_rmu);
+    pthread_mutex_lock(&g_smu);
+    alias_sweep();
+    pthread_mutex_unlock(&g_smu);
     pthread_mutex_unlock(&g_rmu);
 }
 // Handles of deferred binds (BindTexturesDeferred) are read at execution: the record keeps the address of the handles (see hle_nvn.c); every reader of a bind record refreshes it first. Command memory is writable, so it is updated in place
