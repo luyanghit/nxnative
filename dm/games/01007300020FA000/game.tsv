@@ -11,6 +11,8 @@ ipa	AstralChain.ipa
 app_category	public.app-category.action-games
 # Both sticks are used for movement and camera.
 pad_layout	full
+# Build-gated frame step: 60 fps gameplay, 30 fps fixed-step cinematics.
+fps_target	60
 
 # ---- Versions ----
 build	v65536	1.0.1	main=4b159f0f7a360669738390ee8657b4f0	sdk=e29be8ad6778527aa248310d0c71a8a5
@@ -35,3 +37,5 @@ sys_resource	0x0
 # ---- Shader split ----
 shader_groups	/sound/=sound /mv/=mv /miscTex/=misctex /movie/=movie /effect/=effect /Text/=text /ba/=ba /bg/=bg /bh/=bh /bv/=bv /core/=core /em/=em /es/=es /et/=et /event/=event /font/=font /it/=it /ph1/=ph1 /ph2/=ph2 /ph3/=ph3 /ph4/=ph4 /ph5/=ph5 /ph6/=ph6 /ph7/=ph7
 shader_note	ASTRAL CHAIN shaders
+# the NVN depth mode the game sets (nvnDeviceSetDepthMode near = 0): the pipeline archive made offline holds the main0_z vertex entries (dm/gfx/tools/pso_offline.py)
+depth_mode	zero
